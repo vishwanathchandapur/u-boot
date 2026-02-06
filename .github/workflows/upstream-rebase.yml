@@ -42,7 +42,8 @@ jobs:
             build-essential \
             bc bison flex \
             jq \
-            libgnutls28-dev
+            libgnutls28-dev \
+            sbsigntools
 
       # ------------------------------------------------------------
       # Add upstream
