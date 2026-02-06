@@ -33,7 +33,7 @@ jobs:
           ref: master
 
       # ------------------------------------------------------------
-      # Dependencies
+      # Dependencies (U-Boot host tools + EFI)
       # ------------------------------------------------------------
       - name: Install build dependencies
         run: |
@@ -86,10 +86,22 @@ jobs:
           git diff > llm_context/conflicts.diff || true
 
       # ------------------------------------------------------------
-      # Generate PR report with LLM (NO HEREDOC)
+      # Check if there are commits to propose
+      # ------------------------------------------------------------
+      - name: Check for new commits
+        run: |
+          COMMITS=$(git rev-list --count origin/master..HEAD || echo 0)
+          echo "COMMITS_AHEAD=$COMMITS" >> $GITHUB_ENV
+
+          if [ "$COMMITS" -eq 0 ]; then
+            echo "No new commits after rebase. Nothing to do."
+          fi
+
+      # ------------------------------------------------------------
+      # Generate PR report with LLM (optional)
       # ------------------------------------------------------------
       - name: Generate PR report with LLM
-        if: env.LLM_ENABLED == 'true' && env.REBASE_STATUS == '0'
+        if: env.LLM_ENABLED == 'true' && env.REBASE_STATUS == '0' && env.COMMITS_AHEAD != '0'
         env:
           LLM_API_KEY: ${{ secrets.LLM_API_KEY }}
         run: |
@@ -134,7 +146,7 @@ jobs:
       # Fallback report
       # ------------------------------------------------------------
       - name: Generate fallback report
-        if: env.REBASE_STATUS == '0' && env.REPORT_CREATED != 'true'
+        if: env.REBASE_STATUS == '0' && env.COMMITS_AHEAD != '0' && env.REPORT_CREATED != 'true'
         run: |
           printf "%s\n" \
             "Rebase local master onto upstream master" \
@@ -160,15 +172,26 @@ jobs:
       # Push branch
       # ------------------------------------------------------------
       - name: Push rebase branch
-        if: env.REBASE_STATUS == '0'
+        if: env.REBASE_STATUS == '0' && env.COMMITS_AHEAD != '0'
         run: |
           git push origin "$REBASE_BRANCH" --force-with-lease
+
+      # ------------------------------------------------------------
+      # Ensure labels exist
+      # ------------------------------------------------------------
+      - name: Ensure PR labels exist
+        if: env.REBASE_STATUS == '0' && env.COMMITS_AHEAD != '0'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh label create automation --color "0366d6" --description "Automated change" || true
+          gh label create llm-assisted --color "5319e7" --description "LLM assisted workflow" || true
 
       # ------------------------------------------------------------
       # Create Pull Request
       # ------------------------------------------------------------
       - name: Create Pull Request
-        if: env.REBASE_STATUS == '0'
+        if: env.REBASE_STATUS == '0' && env.COMMITS_AHEAD != '0'
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
