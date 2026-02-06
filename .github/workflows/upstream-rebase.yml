@@ -43,7 +43,7 @@ jobs:
             bc bison flex \
             jq \
             libgnutls28-dev \
-            sbsigntools
+            sbsigntool
 
       # ------------------------------------------------------------
       # Add upstream
