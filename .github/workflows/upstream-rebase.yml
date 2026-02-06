@@ -93,7 +93,7 @@ jobs:
           git diff > llm_context/conflicts.diff || true
 
       # ============================================================
-      # LLM-generated PR report
+      # LLM-generated PR report (FIXED HEREDOC)
       # ============================================================
       - name: Generate PR report with LLM
         if: env.LLM_ENABLED == 'true' && env.REBASE_STATUS == '0'
@@ -105,5 +105,103 @@ jobs:
             exit 0
           fi
 
-          cat <<EOF > prompt.txt
-          You are an expert U-Boot maint
+          cat > prompt.txt <<'EOF'
+You are an expert U-Boot maintainer.
+
+Write a pull request description for rebasing
+a local fork onto upstream master.
+
+Include:
+- Summary of changes
+- Conflicts (if any)
+- Risk assessment (SPL / DDR / clocks)
+
+Commits:
+$(cat llm_context/commits.txt)
+
+Diffstat:
+$(cat llm_context/diffstat.txt)
+
+Conflicts:
+$(cat llm_context/conflicts.diff 2>/dev/null || echo "None")
+EOF
+
+          curl https://api.openai.com/v1/responses \
+            -H "Authorization: Bearer $LLM_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d '{
+              "model": "gpt-4.1",
+              "input": [
+                {
+                  "role": "user",
+                  "content": [
+                    { "type": "text", "text": "'"$(sed 's/"/\\"/g' prompt.txt)"'" }
+                  ]
+                }
+              ],
+              "temperature": 0.2
+            }' | jq -r '.output_text' > report.md
+
+          echo "REPORT_CREATED=true" >> $GITHUB_ENV
+
+      # ============================================================
+      # Fallback report
+      # ============================================================
+      - name: Generate fallback report
+        if: env.REBASE_STATUS == '0' && env.REPORT_CREATED != 'true'
+        run: |
+          cat > report.md <<EOF
+Rebase local master onto upstream master
+
+Commits:
+$(cat llm_context/commits.txt)
+
+Diffstat:
+$(cat llm_context/diffstat.txt)
+EOF
+
+      # ============================================================
+      # Build (sandbox)
+      # ============================================================
+      - name: Build U-Boot (sandbox)
+        if: env.REBASE_STATUS == '0'
+        run: |
+          BOARD="${{ github.event.inputs.board }}"
+          make distclean
+          make ${BOARD}_defconfig
+          make -j$(nproc)
+
+      # ============================================================
+      # Push rebase branch
+      # ============================================================
+      - name: Push rebase branch
+        if: env.REBASE_STATUS == '0'
+        run: |
+          git push origin "$REBASE_BRANCH" --force-with-lease
+
+      # ============================================================
+      # Create Pull Request
+      # ============================================================
+      - name: Create Pull Request
+        if: env.REBASE_STATUS == '0'
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh pr create \
+            --title "Rebase local master onto upstream master" \
+            --body-file report.md \
+            --base master \
+            --head "$REBASE_BRANCH" \
+            --label "automation,llm-assisted"
+
+      # ============================================================
+      # Upload audit artifacts
+      # ============================================================
+      - name: Upload audit artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: rebase-audit
+          path: |
+            llm_context/
+            report.md
