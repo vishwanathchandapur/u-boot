@@ -9,7 +9,7 @@ on:
         default: "sandbox"
 
   schedule:
-    - cron: "0 3 * * 1"   # Weekly (Monday)
+    - cron: "0 3 * * 1"
 
 jobs:
   rebase:
@@ -23,18 +23,18 @@ jobs:
       LLM_ENABLED: "true"
 
     steps:
-      # ============================================================
+      # ------------------------------------------------------------
       # Checkout
-      # ============================================================
+      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
           ref: master
 
-      # ============================================================
-      # Dependencies (sandbox = native build)
-      # ============================================================
+      # ------------------------------------------------------------
+      # Dependencies (sandbox build)
+      # ------------------------------------------------------------
       - name: Install build dependencies
         run: |
           sudo apt-get update
@@ -43,58 +43,50 @@ jobs:
             bc bison flex \
             jq
 
-      # ============================================================
-      # Add upstream U-Boot
-      # ============================================================
+      # ------------------------------------------------------------
+      # Add upstream
+      # ------------------------------------------------------------
       - name: Add upstream remote
         run: |
-          git remote add $UPSTREAM_REMOTE https://source.denx.de/u-boot/u-boot.git || true
-          git fetch $UPSTREAM_REMOTE
+          git remote add upstream https://source.denx.de/u-boot/u-boot.git || true
+          git fetch upstream
 
-      # ============================================================
+      # ------------------------------------------------------------
       # Create rebase branch
-      # ============================================================
+      # ------------------------------------------------------------
       - name: Prepare rebase branch
         run: |
           DATE=$(date +%Y%m%d)
           BRANCH="${BRANCH_PREFIX}-${DATE}"
 
           git checkout -B "$BRANCH" "$LOCAL_BRANCH"
-
           echo "REBASE_BRANCH=$BRANCH" >> $GITHUB_ENV
 
-      # ============================================================
-      # Rebase local master onto upstream master
-      # ============================================================
+      # ------------------------------------------------------------
+      # Rebase
+      # ------------------------------------------------------------
       - name: Rebase onto upstream master
-        id: rebase
         run: |
           set +e
-          git rebase "$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"
+          git rebase upstream/master
           echo "REBASE_STATUS=$?" >> $GITHUB_ENV
           exit 0
 
-      # ============================================================
-      # Collect context (audit + LLM)
-      # ============================================================
+      # ------------------------------------------------------------
+      # Collect context
+      # ------------------------------------------------------------
       - name: Collect rebase context
         if: always()
         run: |
           mkdir -p llm_context
-
-          git log "$UPSTREAM_REMOTE/$UPSTREAM_BRANCH"..HEAD --oneline \
-            > llm_context/commits.txt || true
-
-          git diff --stat "$UPSTREAM_REMOTE/$UPSTREAM_BRANCH" \
-            > llm_context/diffstat.txt || true
-
+          git log upstream/master..HEAD --oneline > llm_context/commits.txt || true
+          git diff --stat upstream/master > llm_context/diffstat.txt || true
           git status > llm_context/status.txt || true
-
           git diff > llm_context/conflicts.diff || true
 
-      # ============================================================
-      # LLM-generated PR report (FIXED HEREDOC)
-      # ============================================================
+      # ------------------------------------------------------------
+      # LLM report (SAFE HEREDOC)
+      # ------------------------------------------------------------
       - name: Generate PR report with LLM
         if: env.LLM_ENABLED == 'true' && env.REBASE_STATUS == '0'
         env:
@@ -105,7 +97,7 @@ jobs:
             exit 0
           fi
 
-          cat > prompt.txt <<'EOF'
+          cat > prompt.txt <<EOF
 You are an expert U-Boot maintainer.
 
 Write a pull request description for rebasing
@@ -117,13 +109,13 @@ Include:
 - Risk assessment (SPL / DDR / clocks)
 
 Commits:
-$(cat llm_context/commits.txt)
+\$(cat llm_context/commits.txt)
 
 Diffstat:
-$(cat llm_context/diffstat.txt)
+\$(cat llm_context/diffstat.txt)
 
 Conflicts:
-$(cat llm_context/conflicts.diff 2>/dev/null || echo "None")
+\$(cat llm_context/conflicts.diff 2>/dev/null || echo "None")
 EOF
 
           curl https://api.openai.com/v1/responses \
@@ -144,9 +136,9 @@ EOF
 
           echo "REPORT_CREATED=true" >> $GITHUB_ENV
 
-      # ============================================================
+      # ------------------------------------------------------------
       # Fallback report
-      # ============================================================
+      # ------------------------------------------------------------
       - name: Generate fallback report
         if: env.REBASE_STATUS == '0' && env.REPORT_CREATED != 'true'
         run: |
@@ -160,28 +152,27 @@ Diffstat:
 $(cat llm_context/diffstat.txt)
 EOF
 
-      # ============================================================
+      # ------------------------------------------------------------
       # Build (sandbox)
-      # ============================================================
+      # ------------------------------------------------------------
       - name: Build U-Boot (sandbox)
         if: env.REBASE_STATUS == '0'
         run: |
-          BOARD="${{ github.event.inputs.board }}"
           make distclean
-          make ${BOARD}_defconfig
+          make sandbox_defconfig
           make -j$(nproc)
 
-      # ============================================================
-      # Push rebase branch
-      # ============================================================
+      # ------------------------------------------------------------
+      # Push branch
+      # ------------------------------------------------------------
       - name: Push rebase branch
         if: env.REBASE_STATUS == '0'
         run: |
           git push origin "$REBASE_BRANCH" --force-with-lease
 
-      # ============================================================
-      # Create Pull Request
-      # ============================================================
+      # ------------------------------------------------------------
+      # Create PR
+      # ------------------------------------------------------------
       - name: Create Pull Request
         if: env.REBASE_STATUS == '0'
         env:
@@ -194,9 +185,9 @@ EOF
             --head "$REBASE_BRANCH" \
             --label "automation,llm-assisted"
 
-      # ============================================================
-      # Upload audit artifacts
-      # ============================================================
+      # ------------------------------------------------------------
+      # Upload artifacts
+      # ------------------------------------------------------------
       - name: Upload audit artifacts
         if: always()
         uses: actions/upload-artifact@v4
